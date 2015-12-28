@@ -9,14 +9,12 @@ if (!defined('LYCHEE')) exit('Error: Direct access is not allowed!');
 
 class Access {
 
-	protected $database	= null;
 	protected $plugins	= null;
 	protected $settings	= null;
 
-	public function __construct($database, $plugins, $settings) {
+	public function __construct($plugins, $settings) {
 
 		# Init vars
-		$this->database	= $database;
 		$this->plugins	= $plugins;
 		$this->settings	= $settings;
 
@@ -25,5 +23,3 @@ class Access {
 	}
 
 }
-
-?>

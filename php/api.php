@@ -90,4 +90,3 @@ if (!empty($_POST['function'])||!empty($_GET['function'])) {
 
 }
 
-?>

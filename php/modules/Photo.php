@@ -3,13 +3,13 @@
 ###
 # @name			Photo Module
 # @copyright	2015 by Tobias Reich
+# modified by Waitman Gobble <ns@waitman.net> 12/28/15
 ###
 
 if (!defined('LYCHEE')) exit('Error: Direct access is not allowed!');
 
 class Photo extends Module {
 
-	private $database	= null;
 	private $settings	= null;
 	private $photoIDs	= null;
 
@@ -25,11 +25,9 @@ class Photo extends Module {
 		'.gif'
 	);
 
-	public function __construct($database, $plugins, $settings, $photoIDs) {
+	public function __construct($settings, $photoIDs) {
 
 		# Init vars
-		$this->database	= $database;
-		$this->plugins	= $plugins;
 		$this->settings	= $settings;
 		$this->photoIDs	= $photoIDs;
 
@@ -43,18 +41,14 @@ class Photo extends Module {
 		# e.g. when calling this functions inside an if-condition
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->settings, $files));
+		self::dependencies(isset($this->settings, $files));
 
 		# Check permissions
 		if (hasPermissions(LYCHEE_UPLOADS)===false||
 			hasPermissions(LYCHEE_UPLOADS_BIG)===false||
 			hasPermissions(LYCHEE_UPLOADS_THUMB)===false) {
-				Log::error($this->database, __METHOD__, __LINE__, 'An upload-folder is missing or not readable and writable');
 				exit('Error: An upload-folder is missing or not readable and writable!');
 		}
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
 
 		switch($albumID) {
 
@@ -90,35 +84,30 @@ class Photo extends Module {
 
 			# Check if file exceeds the upload_max_filesize directive
 			if ($file['error']===UPLOAD_ERR_INI_SIZE) {
-				Log::error($this->database, __METHOD__, __LINE__, 'The uploaded file exceeds the upload_max_filesize directive in php.ini');
 				if ($returnOnError===true) return false;
 				exit('Error: The uploaded file exceeds the upload_max_filesize directive in php.ini!');
 			}
 
 			# Check if file was only partially uploaded
 			if ($file['error']===UPLOAD_ERR_PARTIAL) {
-				Log::error($this->database, __METHOD__, __LINE__, 'The uploaded file was only partially uploaded');
 				if ($returnOnError===true) return false;
 				exit('Error: The uploaded file was only partially uploaded!');
 			}
 
 			# Check if writing file to disk failed
 			if ($file['error']===UPLOAD_ERR_CANT_WRITE) {
-				Log::error($this->database, __METHOD__, __LINE__, 'Failed to write photo to disk');
 				if ($returnOnError===true) return false;
 				exit('Error: Failed to write photo to disk!');
 			}
 
 			# Check if a extension stopped the file upload
 			if ($file['error']===UPLOAD_ERR_EXTENSION) {
-				Log::error($this->database, __METHOD__, __LINE__, 'A PHP extension stopped the file upload');
 				if ($returnOnError===true) return false;
 				exit('Error: A PHP extension stopped the file upload!');
 			}
 
 			# Check if the upload was successful
 			if ($file['error']!==UPLOAD_ERR_OK) {
-				Log::error($this->database, __METHOD__, __LINE__, 'Upload contains an error (' . $file['error'] . ')');
 				if ($returnOnError===true) return false;
 				exit('Error: Upload failed!');
 			}
@@ -126,7 +115,6 @@ class Photo extends Module {
 			# Verify extension
 			$extension = getExtension($file['name']);
 			if (!in_array(strtolower($extension), Photo::$validExtensions, true)) {
-				Log::error($this->database, __METHOD__, __LINE__, 'Photo format not supported');
 				if ($returnOnError===true) return false;
 				exit('Error: Photo format not supported!');
 			}
@@ -134,14 +122,16 @@ class Photo extends Module {
 			# Verify image
 			$type = @exif_imagetype($file['tmp_name']);
 			if (!in_array($type, Photo::$validTypes, true)) {
-				Log::error($this->database, __METHOD__, __LINE__, 'Photo type not supported');
 				if ($returnOnError===true) return false;
 				exit('Error: Photo type not supported!');
 			}
 
 			# Generate id
-			$id = str_replace('.', '', microtime(true));
-			while(strlen($id)<14) $id .= 0;
+			$sql = "INSERT INTO photos (id) VALUES (DEFAULT) RETURNING id";
+			$res = pg_query($db,$sql);
+			$row = pg_fetch_array($res);
+			$id = $row['id'];
+			pg_free_result($res);
 
 			# Set paths
 			$tmp_name	= $file['tmp_name'];
@@ -151,7 +141,6 @@ class Photo extends Module {
 			# Calculate checksum
 			$checksum = sha1_file($tmp_name);
 			if ($checksum===false) {
-				Log::error($this->database, __METHOD__, __LINE__, 'Could not calculate checksum for photo');
 				if ($returnOnError===true) return false;
 				exit('Error: Could not calculate checksum for photo!');
 			}
@@ -181,13 +170,11 @@ class Photo extends Module {
 				# Import if not uploaded via web
 				if (!is_uploaded_file($tmp_name)) {
 					if (!@copy($tmp_name, $path)) {
-						Log::error($this->database, __METHOD__, __LINE__, 'Could not copy photo to uploads');
 						if ($returnOnError===true) return false;
 						exit('Error: Could not copy photo to uploads!');
 					} else @unlink($tmp_name);
 				} else {
 					if (!@move_uploaded_file($tmp_name, $path)) {
-						Log::error($this->database, __METHOD__, __LINE__, 'Could not move photo to uploads');
 						if ($returnOnError===true) return false;
 						exit('Error: Could not move photo to uploads!');
 					}
@@ -198,7 +185,6 @@ class Photo extends Module {
 				# Photo already exists
 				# Check if the user wants to skip duplicates
 				if ($this->settings['skipDuplicates']==='1') {
-					Log::notice($this->database, __METHOD__, __LINE__, 'Skipped upload of existing photo because skipDuplicates is activated');
 					if ($returnOnError===true) return false;
 					exit('Warning: This photo has been skipped because it\'s already in your library.');
 				}
@@ -220,15 +206,12 @@ class Photo extends Module {
 				if ($file['type']==='image/jpeg'&&isset($info['orientation'])&&$info['orientation']!=='') {
 					$adjustFile = $this->adjustFile($path, $info);
 					if ($adjustFile!==false) $info = $adjustFile;
-					else Log::notice($this->database, __METHOD__, __LINE__, 'Skipped adjustment of photo (' . $info['title'] . ')');
 				}
 
-				# Set original date
-				if ($info['takestamp']!==''&&$info['takestamp']!==0) @touch($path, $info['takestamp']);
+				$info['takestamp']=time();
 
 				# Create Thumb
 				if (!$this->createThumb($path, $photo_name, $info['type'], $info['width'], $info['height'])) {
-					Log::error($this->database, __METHOD__, __LINE__, 'Could not create thumbnail for photo');
 					if ($returnOnError===true) return false;
 					exit('Error: Could not create thumbnail for photo!');
 				}
@@ -238,25 +221,37 @@ class Photo extends Module {
 				else $medium = 0;
 
 				# Set thumb url
-				$path_thumb = md5($id) . '.jpeg';
+				$path_thumb = md5($id) . '.jpg';
 
 			}
 
 			# Save to DB
-			$values	= array(LYCHEE_TABLE_PHOTOS, $id, $info['title'], $photo_name, $description, $tags, $info['type'], $info['width'], $info['height'], $info['size'], $info['iso'], $info['aperture'], $info['make'], $info['model'], $info['shutter'], $info['focal'], $info['takestamp'], $path_thumb, $albumID, $public, $star, $checksum, $medium);
-			$query	= Database::prepare($this->database, "INSERT INTO ? (id, title, url, description, tags, type, width, height, size, iso, aperture, make, model, shutter, focal, takestamp, thumbUrl, album, public, star, checksum, medium) VALUES ('?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?')", $values);
-			$result = $this->database->query($query);
-
-			if (!$result) {
-				Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-				if ($returnOnError===true) return false;
-				exit('Error: Could not save photo in database!');
-			}
+			$sql = "UPDATE photos SET \"title\"=".pg_escape_literal($info['title']).",".
+					"\"description\"=".pg_escape_literal($description).",".
+					"\"tags\"=".pg_escape_literal($tags).",".
+					"\"type\"=".pg_escape_literal($info['type']).",".
+					"\"width\"=".pg_escape_literal($info['width']).",".
+					"\"height\"=".pg_escape_literal($info['height']).",".
+					"\"size\"=".pg_escape_literal($info['size']).",".
+					"\"iso\"=".pg_escape_literal($info['iso']).",".
+					"\"aperature\"=".pg_escape_literal($info['aperature']).",".
+					"\"make\"=".pg_escape_literal($info['make']).",".
+					"\"model\"=".pg_escape_literal($info['model']).",".
+					"\"shutter\"=".pg_escape_literal($info['shutter']).",".
+					"\"focal\"=".pg_escape_literal($info['focal']).",".
+					"\"takestamp\=".time().",".
+					"\"thumbUrl\"=".pg_escape_literal($path_thumb).",".
+					"\"album\"=".pg_escape_literal($albumID).",".
+					"\"public\"=".pg_escape_literal($public).",".
+					"\"star\"=".pg_escape_literal($star).",".
+					"\"checksum\"=".pg_escape_literal($checksum).",".
+					"\"medium\"=".pg_escape_literal($medium).
+					"WHERE id=".intval($id);
+					
+			pg_query($db,$sql) or die($sql);
+				
 
 		}
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
 
 		return true;
 
@@ -265,34 +260,34 @@ class Photo extends Module {
 	private function exists($checksum, $photoID = null) {
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $checksum));
+		self::dependencies(isset($checksum));
 
 		# Exclude $photoID from select when $photoID is set
-		if (isset($photoID)) $query = Database::prepare($this->database, "SELECT id, url, thumbUrl, medium FROM ? WHERE checksum = '?' AND id <> '?' LIMIT 1", array(LYCHEE_TABLE_PHOTOS, $checksum, $photoID));
-		else $query = Database::prepare($this->database, "SELECT id, url, thumbUrl, medium FROM ? WHERE checksum = '?' LIMIT 1", array(LYCHEE_TABLE_PHOTOS, $checksum));
-
-		$result	= $this->database->query($query);
-
-		if (!$result) {
-			Log::error($this->database, __METHOD__, __LINE__, 'Could not check for existing photos with the same checksum');
-			return false;
+		if (isset($photoID)) 
+		{
+			$sql = "SELECT id, url, thumbUrl, medium FROM photos WHERE checksum = ".pg_escape_literal($checksum)." AND id != ".pg_escape_literal($photoID);
+		} else {
+			$sql = "SELECT id, url, thumbUrl, medium FROM photos WHERE checksum = ".pg_escape_literal($checksum);
 		}
 
-		if ($result->num_rows===1) {
+		$res	= pg_query($db,$sql);
 
-			$result = $result->fetch_object();
+		if (pg_num_rows($res)>0) {
+
+			$row = pg_fetch_array($res);
+			
 
 			$return = array(
-				'photo_name'	=> $result->url,
-				'path'			=> LYCHEE_UPLOADS_BIG . $result->url,
-				'path_thumb'	=> $result->thumbUrl,
-				'medium'		=> $result->medium
+				'photo_name'	=> $row['url'],
+				'path'			=> LYCHEE_UPLOADS_BIG . $row['url'],
+				'path_thumb'	=> $row['thumbUrl'],
+				'medium'		=> $row['medium']
 			);
-
+			pg_free_result($res);
 			return $return;
 
 		}
-
+		pg_free_result($res);
 		return false;
 
 	}
@@ -300,10 +295,7 @@ class Photo extends Module {
 	private function createThumb($url, $filename, $type, $width, $height) {
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->settings, $url, $filename, $type, $width, $height));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->settings, $url, $filename, $type, $width, $height));
 
 		# Size of the thumbnail
 		$newWidth	= 200;
@@ -359,8 +351,7 @@ class Photo extends Module {
 				case 'image/jpeg':	$sourceImg = imagecreatefromjpeg($url); break;
 				case 'image/png':	$sourceImg = imagecreatefrompng($url); break;
 				case 'image/gif':	$sourceImg = imagecreatefromgif($url); break;
-				default:			Log::error($this->database, __METHOD__, __LINE__, 'Type of photo is not supported');
-									return false;
+				default:			return false;
 									break;
 			}
 
@@ -379,9 +370,6 @@ class Photo extends Module {
 
 		}
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
 		return true;
 
 	}
@@ -399,10 +387,8 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->settings, $url, $filename, $width, $height));
+		self::dependencies(isset($this->settings, $url, $filename, $width, $height));
 
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
 
 		# Set to true when creation of medium-photo failed
 		$error = false;
@@ -417,7 +403,6 @@ class Photo extends Module {
 		if (hasPermissions(LYCHEE_UPLOADS_MEDIUM)===false) {
 
 			# Permissions are missing
-			Log::notice($this->database, __METHOD__, __LINE__, 'Skipped creation of medium-photo, because uploads/medium/ is missing or not readable and writable.');
 			$error = true;
 
 		}
@@ -442,7 +427,6 @@ class Photo extends Module {
 			# Save image
 			try { $medium->writeImage($newUrl); }
 			catch (ImagickException $err) {
-				Log::notice($this->database, __METHOD__, __LINE__, 'Could not save medium-photo: ' . $err->getMessage());
 				$error = true;
 			}
 
@@ -457,9 +441,6 @@ class Photo extends Module {
 			$error = true;
 
 		}
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
 
 		if ($error===true) return false;
 		return true;
@@ -478,9 +459,6 @@ class Photo extends Module {
 
 		# Check dependencies
 		self::dependencies(isset($path, $info));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
 
 		$swapSize = false;
 
@@ -585,9 +563,6 @@ class Photo extends Module {
 
 		}
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
 		# SwapSize should be true when the image has been rotated
 		# Return new dimensions in this case
 		if ($swapSize===true) {
@@ -654,16 +629,15 @@ class Photo extends Module {
 		# (array) $photo
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Get photo
-		$query	= Database::prepare($this->database, "SELECT * FROM ? WHERE id = '?' LIMIT 1", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
-		$photo	= $photos->fetch_assoc();
-
+		$sql = "SELECT * FROM photos WHERE id=".pg_escape_literal($this->photoIDs);
+		
+		$res = pg_query($db,$sql);
+		$row = pg_fetch_array($res);
+		$photo = $row;
+		
 		# Parse photo
 		$photo['sysdate'] = date('d M. Y', substr($photo['id'], 0, -4));
 		if (strlen($photo['takestamp'])>1) $photo['takedate'] = date('d M. Y', $photo['takestamp']);
@@ -683,23 +657,22 @@ class Photo extends Module {
 			if ($photo['album']!=='0') {
 
 				# Get album
-				$query	= Database::prepare($this->database, "SELECT public FROM ? WHERE id = '?' LIMIT 1", array(LYCHEE_TABLE_ALBUMS, $photo['album']));
-				$albums	= $this->database->query($query);
-				$album	= $albums->fetch_assoc();
+				$sql = "SELECT public FROM albums WHERE id=".intval($photo['album']);
+				$nres = pg_query($db,$sql);
+				$nrow = pg_fetch_array($res);
+				
 
 				# Parse album
-				$photo['public'] = ($album['public']==='1' ? '2' : $photo['public']);
-
+				$photo['public'] = ($nrow['public']==='1' ? '2' : $photo['public']);
+				pg_free_result($nres);
 			}
 
 			$photo['original_album']	= $photo['album'];
 			$photo['album']				= $albumID;
 
 		}
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
+		pg_free_result($res);
+		
 		return $photo;
 
 	}
@@ -713,10 +686,7 @@ class Photo extends Module {
 		# (array) $return
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $url));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($url));
 
 		$iptcArray	= array();
 		$info		= getimagesize($url, $iptcArray);
@@ -805,9 +775,6 @@ class Photo extends Module {
 
 		}
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
 		return $return;
 
 	}
@@ -820,32 +787,23 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Get photo
-		$query	= Database::prepare($this->database, "SELECT title, url FROM ? WHERE id = '?' LIMIT 1", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
-		$photo	= $photos->fetch_object();
-
-		# Error in database query
-		if (!$photos) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
+		$sql = "SELECT title, url FROM photos WHERE id = ".pg_escape_literal($this->photoIDs);
+		$res = pg_query($db,$sql);
+		$row = pg_fetch_array($res);
+		$photo = $row;
 
 		# Photo not found
-		if ($photo===null) {
-			Log::error($this->database, __METHOD__, __LINE__, 'Album not found. Cannot start download.');
+		if (pg_num_rows($res)<1) {
+			pg_free_result($res);
 			return false;
 		}
 
 		# Get extension
-		$extension = getExtension($photo->url);
+		$extension = getExtension($photo['url']);
 		if ($extension===false) {
-			Log::error($this->database, __METHOD__, __LINE__, 'Invalid photo extension');
 			return false;
 		}
 
@@ -856,21 +814,18 @@ class Photo extends Module {
 					);
 
 		# Parse title
-		if ($photo->title=='') $photo->title = 'Untitled';
+		if ($photo['title']=='') $photo['title'] = 'Untitled';
 
 		# Escape title
-		$photo->title = str_replace($badChars, '', $photo->title);
+		$photo['title'] = str_replace($badChars, '', $photo['title']);
 
 		# Set headers
 		header("Content-Type: application/octet-stream");
-		header("Content-Disposition: attachment; filename=\"" . $photo->title . $extension . "\"");
-		header("Content-Length: " . filesize(LYCHEE_UPLOADS_BIG . $photo->url));
+		header("Content-Disposition: attachment; filename=\"" . $photo['title'] . $extension . "\"");
+		header("Content-Length: " . filesize(LYCHEE_UPLOADS_BIG . $photo['url']));
 
 		# Send file
-		readfile(LYCHEE_UPLOADS_BIG . $photo->url);
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
+		readfile(LYCHEE_UPLOADS_BIG . $photo['url']);
 
 		return true;
 
@@ -886,22 +841,12 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Set title
-		$query	= Database::prepare($this->database, "UPDATE ? SET title = '?' WHERE id IN (?)", array(LYCHEE_TABLE_PHOTOS, $title, $this->photoIDs));
-		$result	= $this->database->query($query);
+		$sql = "UPDATE photos SET title = ".pg_escape_literal($title)." WHERE id IN (".$this->photoIDs.")";
+		pg_query($db,$sql);
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
-		if (!$result) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
 		return true;
 
 	}
@@ -916,22 +861,12 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Set description
-		$query	= Database::prepare($this->database, "UPDATE ? SET description = '?' WHERE id IN ('?')", array(LYCHEE_TABLE_PHOTOS, $description, $this->photoIDs));
-		$result	= $this->database->query($query);
+		$sql = "UPDATE photos SET description = ".pg_escape_literal($description)." WHERE id IN (".$this->photoIDs.")";
+		pg_query($db,$sql);
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
-		if (!$result) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
 		return true;
 
 	}
@@ -944,38 +879,28 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Init vars
 		$error	= false;
 
 		# Get photos
-		$query	= Database::prepare($this->database, "SELECT id, star FROM ? WHERE id IN (?)", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
+		$sql ="SELECT id, star FROM photos WHERE id IN (".pg_escape_string($this->photoIDs).")";
+		$res = pg_query($db,$sql);
+		
 
 		# For each photo
-		while ($photo = $photos->fetch_object()) {
+		while ($photo = pg_fetch_array($res)) {
 
 			# Invert star
-			$star = ($photo->star==0 ? 1 : 0);
+			$star = ($photo['star']==0 ? 1 : 0);
 
 			# Set star
-			$query	= Database::prepare($this->database, "UPDATE ? SET star = '?' WHERE id = '?'", array(LYCHEE_TABLE_PHOTOS, $star, $photo->id));
-			$star	= $this->database->query($query);
-			if (!$star) $error = true;
-
+			$sql = "UPDATE photos SET star = ".pg_escape_literal($star)." WHERE id=".pg_escape_literal($row['id']);
+			pg_query($db,$sql);
 		}
+		pg_free_result($res);
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
-		if ($error===true) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
 		return true;
 
 	}
@@ -989,40 +914,44 @@ class Photo extends Module {
 		# (int) 2 = Photo public or album public and password correct
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Get photo
-		$query	= Database::prepare($this->database, "SELECT public, album FROM ? WHERE id = '?' LIMIT 1", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
-		$photo	= $photos->fetch_object();
-
+		$sql = "SELECT public, album FROM photos WHERE id = ".pg_escape_literal($this->photoIDs);
+		$res = pg_query($db,$sql);
+		$row = pg_fetch_array($res);
+		
 		# Check if public
-		if ($photo->public==='1') {
+		if ($row['public']==='1') {
 
 			# Photo public
+			pg_free_result($res);
 			return 2;
 
 		} else {
 
 			# Check if album public
-			$album	= new Album($this->database, null, null, $photo->album);
+			$album	= new Album(null, null, $row['album']);
 			$agP	= $album->getPublic();
 			$acP	= $album->checkPassword($password);
 
 			# Album public and password correct
-			if ($agP===true&&$acP===true) return 2;
+			if ($agP===true&&$acP===true) 
+			{
+				pg_free_result($res);
+				return 2;
+			}
 
 			# Album public, but password incorrect
-			if ($agP===true&&$acP===false) return 1;
+			if ($agP===true&&$acP===false) 
+			{
+				pg_free_result($res);
+				return 1;
+			}
 
 		}
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
+		pg_free_result($res);
 		# Photo private
 		return 0;
 
@@ -1036,30 +965,20 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Get public
-		$query	= Database::prepare($this->database, "SELECT public FROM ? WHERE id = '?' LIMIT 1", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
-		$photo	= $photos->fetch_object();
-
+		$sql = "SELECT public FROM photos WHERE id = ".pg_escape_literal($this->photoIDs);
+		$res = pg_query($db,$sql);
+		$row = pg_fetch_array($res);
+		
 		# Invert public
-		$public = ($photo->public==0 ? 1 : 0);
+		$public = ($row['public']==0 ? 1 : 0);
 
 		# Set public
-		$query	= Database::prepare($this->database, "UPDATE ? SET public = '?' WHERE id = '?'", array(LYCHEE_TABLE_PHOTOS, $public, $this->photoIDs));
-		$result	= $this->database->query($query);
+		$sql = "UPDATE photos SET public = ".pg_escape_literal($public)." WHERE id = ".pg_escape_literal($this->photoIDs);
+		pg_query($db,$sql);
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
-		if (!$result) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
 		return true;
 
 	}
@@ -1072,22 +991,13 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
+		self::dependencies(isset($this->photoIDs));
 
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
 
 		# Set album
-		$query	= Database::prepare($this->database, "UPDATE ? SET album = '?' WHERE id IN (?)", array(LYCHEE_TABLE_PHOTOS, $albumID, $this->photoIDs));
-		$result	= $this->database->query($query);
+		$sql = "UPDATE photos SET album = ".pg_escape_literal($albumID)." WHERE id IN (".$this->photoIDS.")";
+		pg_query($db,$sql);
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
-		if (!$result) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
 		return true;
 
 	}
@@ -1102,69 +1012,22 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Parse tags
 		$tags = preg_replace('/(\ ,\ )|(\ ,)|(,\ )|(,{1,}\ {0,})|(,$|^,)/', ',', $tags);
 		$tags = preg_replace('/,$|^,|(\ ){0,}$/', '', $tags);
 
 		# Set tags
-		$query	= Database::prepare($this->database, "UPDATE ? SET tags = '?' WHERE id IN (?)", array(LYCHEE_TABLE_PHOTOS, $tags, $this->photoIDs));
-		$result	= $this->database->query($query);
+		$sql = "UPDATE photos SET tags = ".pg_escape_literal($tags)." WHERE id IN (".$this->photoIDs.")";
+		pg_query($db,$sql);
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
-		if (!$result) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
 		return true;
 
 	}
 
 	public function duplicate() {
-
-		# Functions duplicates a photo
-		# Returns the following:
-		# (boolean) true = Success
-		# (boolean) false = Failure
-
-		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
-
-		# Get photos
-		$query	= Database::prepare($this->database, "SELECT id, checksum FROM ? WHERE id IN (?)", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
-		if (!$photos) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
-
-		# For each photo
-		while ($photo = $photos->fetch_object()) {
-
-			# Generate id
-			$id = str_replace('.', '', microtime(true));
-			while(strlen($id)<14) $id .= 0;
-
-			# Duplicate entry
-			$values		= array(LYCHEE_TABLE_PHOTOS, $id, LYCHEE_TABLE_PHOTOS, $photo->id);
-			$query		= Database::prepare($this->database, "INSERT INTO ? (id, title, url, description, tags, type, width, height, size, iso, aperture, make, model, shutter, focal, takestamp, thumbUrl, album, public, star, checksum) SELECT '?' AS id, title, url, description, tags, type, width, height, size, iso, aperture, make, model, shutter, focal, takestamp, thumbUrl, album, public, star, checksum FROM ? WHERE id = '?'", $values);
-			$duplicate	= $this->database->query($query);
-			if (!$duplicate) {
-				Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-				return false;
-			}
-
-		}
-
+/* why dup???? */
 		return true;
 
 	}
@@ -1177,73 +1040,52 @@ class Photo extends Module {
 		# (boolean) false = Failure
 
 		# Check dependencies
-		self::dependencies(isset($this->database, $this->photoIDs));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
+		self::dependencies(isset($this->photoIDs));
 
 		# Get photos
-		$query	= Database::prepare($this->database, "SELECT id, url, thumbUrl, checksum FROM ? WHERE id IN (?)", array(LYCHEE_TABLE_PHOTOS, $this->photoIDs));
-		$photos	= $this->database->query($query);
-		if (!$photos) {
-			Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-			return false;
-		}
+		$sql = "SELECT id, url, thumbUrl, checksum FROM photos WHERE id IN (".$this->photoIDs.")";
+		$res = pg_query($db,$sql);
+		
+		while ($photo = pg_fetch_array($res)) {
 
-		# For each photo
-		while ($photo = $photos->fetch_object()) {
-
-			# Check if other photos are referring to this images
-			# If so, only delete the db entry
-			if ($this->exists($photo->checksum, $photo->id)===false) {
+			
+			if ($this->exists($photo['checksum'], $photo['id'])===false) {
 
 				# Get retina thumb url
-				$thumbUrl2x = explode(".", $photo->thumbUrl);
+				$thumbUrl2x = explode(".", $photo['thumbUrl']);
 				$thumbUrl2x = $thumbUrl2x[0] . '@2x.' . $thumbUrl2x[1];
 
 				# Delete big
-				if (file_exists(LYCHEE_UPLOADS_BIG . $photo->url)&&!unlink(LYCHEE_UPLOADS_BIG . $photo->url)) {
-					Log::error($this->database, __METHOD__, __LINE__, 'Could not delete photo in uploads/big/');
+				if (file_exists(LYCHEE_UPLOADS_BIG . $photo['url'])&&!unlink(LYCHEE_UPLOADS_BIG . $photo['url'])) {
 					return false;
 				}
 
 				# Delete medium
-				if (file_exists(LYCHEE_UPLOADS_MEDIUM . $photo->url)&&!unlink(LYCHEE_UPLOADS_MEDIUM . $photo->url)) {
-					Log::error($this->database, __METHOD__, __LINE__, 'Could not delete photo in uploads/medium/');
+				if (file_exists(LYCHEE_UPLOADS_MEDIUM . $photo['url'])&&!unlink(LYCHEE_UPLOADS_MEDIUM . $photo['url'])) {
 					return false;
 				}
 
 				# Delete thumb
-				if (file_exists(LYCHEE_UPLOADS_THUMB . $photo->thumbUrl)&&!unlink(LYCHEE_UPLOADS_THUMB . $photo->thumbUrl)) {
-					Log::error($this->database, __METHOD__, __LINE__, 'Could not delete photo in uploads/thumb/');
+				if (file_exists(LYCHEE_UPLOADS_THUMB . $photo['thumbUrl'])&&!unlink(LYCHEE_UPLOADS_THUMB . $photo['thumbUrl'])) {
 					return false;
 				}
 
 				# Delete thumb@2x
 				if (file_exists(LYCHEE_UPLOADS_THUMB . $thumbUrl2x)&&!unlink(LYCHEE_UPLOADS_THUMB . $thumbUrl2x))	 {
-					Log::error($this->database, __METHOD__, __LINE__, 'Could not delete high-res photo in uploads/thumb/');
 					return false;
 				}
 
 			}
 
 			# Delete db entry
-			$query	= Database::prepare($this->database, "DELETE FROM ? WHERE id = '?'", array(LYCHEE_TABLE_PHOTOS, $photo->id));
-			$delete	= $this->database->query($query);
-			if (!$delete) {
-				Log::error($this->database, __METHOD__, __LINE__, $this->database->error);
-				return false;
-			}
+			$sql = "DELETE FROM photos WHERE id = ".pg_escape_literal($photo->id);
+			pg_query($db,$sql);
 
 		}
 
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
-
+		pg_free_result($res);
 		return true;
 
 	}
 
 }
-
-?>

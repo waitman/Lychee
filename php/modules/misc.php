@@ -3,13 +3,16 @@
 ###
 # @name			Misc Module
 # @copyright	2015 by Tobias Reich
+# modified by Waitman Gobble <ns@waitman.net> 12/28/2015
+# replaced md5 with hash() and getHashedString with password_hash()
+# added postgresql database
 ###
 
 if (!defined('LYCHEE')) exit('Error: Direct access is not allowed!');
 
-function search($database, $settings, $term) {
+function search($settings, $term) {
 
-	if (!isset($database, $settings, $term)) return false;
+	if (!isset($settings, $term)) return false;
 
 	$return['albums'] = '';
 
@@ -23,91 +26,95 @@ function search($database, $settings, $term) {
 	###
 	# Photos
 	###
+	$pterm = pg_escape_string($term);
+	
+	$sql = "SELECT id, title, tags, public, star, album, thumbUrl, takestamp, url FROM photos WHERE title ILIKE '%".$pterm."%' OR description ILIKE '%".$pterm."%' OR tags ILIKE '%".$pterm."%'";
+	$res = pg_query($db,$sql);
 
-	$query	= Database::prepare($database, "SELECT id, title, tags, public, star, album, thumbUrl, takestamp, url FROM ? WHERE title LIKE '%?%' OR description LIKE '%?%' OR tags LIKE '%?%'", array(LYCHEE_TABLE_PHOTOS, $term, $term, $term));
-	$result	= $database->query($query);
-
-	while($photo = $result->fetch_assoc()) {
-
-		$photo = Photo::prepareData($photo);
+	while ($row = pg_fetch_array($res))
+	{
+		$photo = Photo::prepareData($row);
 		$return['photos'][$photo['id']] = $photo;
-
 	}
-
+	pg_free_result($res);
+	
 	###
 	# Albums
 	###
 
-	$query	= Database::prepare($database, "SELECT id, title, public, sysstamp, password FROM ? WHERE title LIKE '%?%' OR description LIKE '%?%'", array(LYCHEE_TABLE_ALBUMS, $term, $term));
-	$result = $database->query($query);
+	$sql = "SELECT id, title, public, sysstamp, \"password\" FROM albums WHERE title ILIKE '%".$pterm."%' OR description ILIKE '%".$pterm."%'";
+	$res = pg_query($db,$sql);
 
-	while($album = $result->fetch_assoc()) {
-
+	while ($row = pg_fetch_array($res))
+	{
 		# Turn data from the database into a front-end friendly format
-		$album = Album::prepareData($album);
+		$album = Album::prepareData($row);
 
-		# Thumbs
-		$query	= Database::prepare($database, "SELECT thumbUrl FROM ? WHERE album = '?' " . $settings['sortingPhotos'] . " LIMIT 0, 3", array(LYCHEE_TABLE_PHOTOS, $album['id']));
-		$thumbs	= $database->query($query);
+		$sql = "SELECT thumUrl FROM photos WHERE album=".$album['id']." ".$settings['sortingPhotos'];
+		$nres = pg_query($db,$sql);
 
-		# For each thumb
 		$k = 0;
-		while ($thumb = $thumbs->fetch_object()) {
-			$album['thumbs'][$k] = LYCHEE_URL_UPLOADS_THUMB . $thumb->thumbUrl;
+		while ($nrow = pg_fetch_array($nres)) {
+			$album['thumbs'][$k] = LYCHEE_URL_UPLOADS_THUMB . $nrow['thumbUrl'];
 			$k++;
 		}
-
+		pg_free_result($nres);
 		# Add to return
 		$return['albums'][$album['id']] = $album;
 
 	}
-
+	pg_free_result($res);
+	
 	# Hash
-	$return['hash'] = md5(json_encode($return));
+	$return['hash'] = hash('sha256',json_encode($return),false);
 
 	return $return;
 
 }
 
-function getGraphHeader($database, $photoID) {
+function getGraphHeader($photoID) {
 
-	if (!isset($database, $photoID)) return false;
+	if (!isset($photoID)) return false;
 
-	$photo = new Photo($database, null, null, $photoID);
+	$photo = new Photo(null, null, $photoID);
 	if ($photo->getPublic('')===false) return false;
 
-	$query	= Database::prepare($database, "SELECT title, description, url, medium FROM ? WHERE id = '?'", array(LYCHEE_TABLE_PHOTOS, $photoID));
-	$result	= $database->query($query);
-	$row	= $result->fetch_object();
+	$sql = "SELECT title, description, url, medium FROM photos WHERE id =".intval($photoID);
+	$res = pg_query($db,$sql);
+	$row = pg_fetch_array($res);
 
 	if (!$result||!$row) return false;
 
-	if ($row->medium==='1')	$dir = 'medium';
-	else					$dir = 'big';
+	if ($row['medium']==='1')
+	{
+			$dir = 'medium';
+	} else {
+			$dir = 'big';
+	}
 
 	$parseUrl	= parse_url('http://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
 	$url		= $parseUrl['scheme'] . '://' . $parseUrl['host'] . $parseUrl['path'] . '?' . $parseUrl['query'];
-	$picture	= $parseUrl['scheme'] . '://' . $parseUrl['host'] . $parseUrl['path'] . '/../uploads/' . $dir . '/' . $row->url;
+	$picture	= $parseUrl['scheme'] . '://' . $parseUrl['host'] . $parseUrl['path'] . '/../uploads/' . $dir . '/' . $row['url'];
 
 	$url		= htmlentities($url);
 	$picture	= htmlentities($picture);
 
-	$row->title			= htmlentities($row->title);
-	$row->description	= htmlentities($row->description);
+	$row['title'] = htmlentities($row['title']);
+	$row['description']	= htmlentities($row['description']);
 
 	$return = '<!-- General Meta Data -->';
-	$return .= '<meta name="title" content="' . $row->title . '">';
-	$return .= '<meta name="description" content="' . $row->description . ' - via Lychee">';
+	$return .= '<meta name="title" content="' . $row['title'] . '">';
+	$return .= '<meta name="description" content="' . $row['description'] . '">';
 	$return .= '<link rel="image_src" type="image/jpeg" href="' . $picture . '">';
 
 	$return .= '<!-- Twitter Meta Data -->';
 	$return .= '<meta name="twitter:card" content="photo">';
-	$return .= '<meta name="twitter:title" content="' . $row->title . '">';
+	$return .= '<meta name="twitter:title" content="' . $row['title'] . '">';
 	$return .= '<meta name="twitter:image:src" content="' . $picture . '">';
 
 	$return .= '<!-- Facebook Meta Data -->';
-	$return .= '<meta property="og:title" content="' . $row->title . '">';
-	$return .= '<meta property="og:description" content="' . $row->description . ' - via Lychee">';
+	$return .= '<meta property="og:title" content="' . $row['title'] . '">';
+	$return .= '<meta property="og:description" content="' . $row['description'] . '">';
 	$return .= '<meta property="og:image" content="' . $picture . '">';
 	$return .= '<meta property="og:url" content="' . $url . '">';
 
@@ -126,31 +133,7 @@ function getExtension($filename) {
 }
 
 function getHashedString($password) {
-
-	# Inspired by http://alias.io/2010/01/store-passwords-safely-with-php-and-mysql/
-
-	# A higher $cost is more secure but consumes more processing power
-	$cost = 10;
-
-	# Create a random salt
-	if (extension_loaded('openssl')) {
-		$salt = strtr(substr(base64_encode(openssl_random_pseudo_bytes(17)),0,22), '+', '.');
-	} elseif (extension_loaded('mcrypt')) {
-		$salt = strtr(substr(base64_encode(mcrypt_create_iv(17, MCRYPT_DEV_URANDOM)),0,22), '+', '.');
-	} else {
-		$salt = "";
-		for ($i = 0; $i < 22; $i++) {
-			$salt .= substr("./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", mt_rand(0, 63), 1);
-		}
-	}
-
-	# Prefix information about the hash so PHP knows how to verify it later.
-	# "$2a$" Means we're using the Blowfish algorithm. The following two digits are the cost parameter.
-	$salt = sprintf("$2a$%02d$", $cost) . $salt;
-
-	# Hash the password with the salt
-	return crypt($password, $salt);
-
+	return password_hash($password, PASSWORD_DEFAULT);
 }
 
 function hasPermissions($path) {
@@ -195,5 +178,3 @@ function fastimagecopyresampled(&$dst_image, $src_image, $dst_x, $dst_y, $src_x,
 	return true;
 
 }
-
-?>

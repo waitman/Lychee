@@ -3,6 +3,9 @@
 ###
 # @name			Session Module
 # @copyright	2015 by Tobias Reich
+# modified by Waitman Gobble <ns@waitman.net>
+# replaced crypt with password_verify
+# added postgresql support
 ###
 
 if (!defined('LYCHEE')) exit('Error: Direct access is not allowed!');
@@ -11,31 +14,19 @@ class Session extends Module {
 
 	private $settings = null;
 
-	public function __construct($plugins, $settings) {
+	public function __construct($settings) {
 
 		# Init vars
-		$this->plugins	= $plugins;
 		$this->settings	= $settings;
 
 		return true;
 
 	}
 
-	public function init($database, $dbName, $public, $version) {
+	public function init($public, $version) {
 
 		# Check dependencies
 		self::dependencies(isset($this->settings, $public, $version));
-
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
-
-		# Update
-		if (!isset($this->settings['version'])||$this->settings['version']!==$version) {
-			if (!Database::update($database, $dbName, @$this->settings['version'])) {
-				Log::error($database, __METHOD__, __LINE__, 'Updating the database failed');
-				exit('Error: Updating the database failed!');
-			}
-		}
 
 		# Return settings
 		$return['config'] = $this->settings;
@@ -77,12 +68,8 @@ class Session extends Module {
 			unset($return['config']['location']);
 			unset($return['config']['imagick']);
 			unset($return['config']['medium']);
-			unset($return['config']['plugins']);
 
 		}
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
 
 		return $return;
 
@@ -93,15 +80,9 @@ class Session extends Module {
 		# Check dependencies
 		self::dependencies(isset($this->settings, $username, $password));
 
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
-
-		$username = crypt($username, $this->settings['username']);
-		$password = crypt($password, $this->settings['password']);
-
 		# Check login with crypted hash
 		if ($this->settings['username']===$username&&
-			$this->settings['password']===$password) {
+			password_verify($password,$this->settings['password'])) {
 				$_SESSION['login']		= true;
 				$_SESSION['identifier']	= $this->settings['identifier'];
 				return true;
@@ -109,9 +90,6 @@ class Session extends Module {
 
 		# No login
 		if ($this->noLogin()===true) return true;
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
 
 		return false;
 
@@ -136,21 +114,13 @@ class Session extends Module {
 
 	public function logout() {
 
-		# Call plugins
-		$this->plugins(__METHOD__, 0, func_get_args());
-
 		$_SESSION['login']		= null;
 		$_SESSION['identifier']	= null;
 
 		session_destroy();
-
-		# Call plugins
-		$this->plugins(__METHOD__, 1, func_get_args());
 
 		return true;
 
 	}
 
 }
-
-?>
