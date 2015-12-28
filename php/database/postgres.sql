@@ -6,7 +6,7 @@ CREATE TABLE albums (
 "public" integer NOT NULL DEFAULT 0,
 "visible" integer NOT NULL DEFAULT 1,
 "downloadable" integer NOT NULL DEFAULT 0,
-"password" character varying (100),
+"password" character varying (100)
 );
 
 CREATE TABLE photos (
