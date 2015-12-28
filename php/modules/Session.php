@@ -63,7 +63,6 @@ class Session extends Module {
 			unset($return['config']['thumbQuality']);
 			unset($return['config']['sortingAlbums']);
 			unset($return['config']['sortingPhotos']);
-			unset($return['config']['dropboxKey']);
 			unset($return['config']['login']);
 			unset($return['config']['location']);
 			unset($return['config']['imagick']);

@@ -48,7 +48,6 @@ INSERT INTO settings ("key", "value") VALUES ('sortingPhotos','ORDER BY id DESC'
 INSERT INTO settings ("key", "value") VALUES ('sortingAlbums','ORDER BY id DESC');
 INSERT INTO settings ("key", "value") VALUES ('medium','1');
 INSERT INTO settings ("key", "value") VALUES ('imagick','1');
-INSERT INTO settings ("key", "value") VALUES ('dropboxKey','');
 INSERT INTO settings ("key", "value") VALUES ('identifier','');
 INSERT INTO settings ("key", "value") VALUES ('skipDuplicates','0');
 INSERT INTO settings ("key", "value") VALUES ('plugins','');

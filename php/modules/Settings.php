@@ -49,10 +49,6 @@ class Settings extends Module {
 
 	}
 
-	public function setDropboxKey($key) {
-		return false;
-	}
-
 	public function setSortingPhotos($type, $order) {
 
 		# Check dependencies
